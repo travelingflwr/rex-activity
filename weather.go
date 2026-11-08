@@ -190,7 +190,7 @@ type weatherWatch struct {
 
 func newWeatherWatch(wake func()) *weatherWatch {
 	w := &weatherWatch{wake: wake, again: make(chan struct{}, 1)}
-	go w.run()
+	keepGoing("weather", w.run)
 	return w
 }
 
@@ -224,9 +224,18 @@ func (w *weatherWatch) run() {
 			w.mu.Unlock()
 		}
 		w.wake()
-		select {
-		case <-w.again:
-		case <-time.After(15 * time.Minute):
+		stamp := fileStamp(configPath())
+		until := time.Now().Add(15 * time.Minute)
+	wait:
+		for time.Now().Before(until) {
+			select {
+			case <-w.again:
+				break wait
+			case <-time.After(3 * time.Second):
+				if fileStamp(configPath()) != stamp {
+					break wait // a new place, or units
+				}
+			}
 		}
 	}
 }

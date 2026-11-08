@@ -419,7 +419,7 @@ type scanner struct {
 
 func newScanner() *scanner {
 	sc := &scanner{remote: map[string][]Agent{}, changed: make(chan struct{}, 1)}
-	go sc.run()
+	keepGoing("agent scan", sc.run)
 	return sc
 }
 

@@ -15,6 +15,7 @@ import (
 	"image/color"
 	"image/draw"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -192,10 +193,18 @@ func runActivity(args []string) error {
 		}
 	}
 	draw()
+	logf("Activity started, %dx%d cells", s.ws.cols, s.ws.rows)
+	defer func() {
+		if r := recover(); r != nil {
+			logf("Activity crashed: %v\n%s", r, debug.Stack())
+			panic(r)
+		}
+	}()
 
 	for {
 		select {
 		case <-s.quit:
+			logf("Activity closed by a signal")
 			return nil
 		case <-s.winch:
 			s.resize()
@@ -215,6 +224,7 @@ func runActivity(args []string) error {
 			if time.Since(checked) > 2*time.Second {
 				checked = time.Now()
 				if st := fileStamp(self); st != "" && built != "" && st != built {
+					logf("Activity restarting on a new build")
 					return errRestart
 				}
 			}
@@ -228,6 +238,7 @@ func runActivity(args []string) error {
 			draw()
 		case ev, open := <-s.events:
 			if !open {
+				logf("Activity closed: the terminal went away")
 				return nil
 			}
 			if s.event(ev) {
@@ -268,6 +279,7 @@ func runActivity(args []string) error {
 			k := ev.key
 			switch {
 			case k.is('q', 0), k.is(keyEscape, 0), k.is('c', modCtrl):
+				logf("Activity closed by a key (%q, mods %d)", k.code, k.mods)
 				return nil
 			case k.is('j', 0), k.is(keyDown, 0):
 				v.scroll += avScrollN

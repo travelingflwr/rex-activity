@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,38 @@ func stateDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".local", "state", "rex-activity")
+}
+
+// logf notes something in ~/.local/state/rex-activity/activity.log.
+func logf(format string, args ...any) {
+	path := filepath.Join(stateDir(), "activity.log")
+	os.MkdirAll(stateDir(), 0o700)
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 1<<20 {
+		os.Rename(path, path+".old")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s [%d] %s\n", time.Now().Format("2006-01-02 15:04:05"), os.Getpid(), fmt.Sprintf(format, args...))
+}
+
+// keepGoing runs loop, and runs it again if it panics, noting why.
+func keepGoing(name string, loop func()) {
+	go func() {
+		for {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logf("%s crashed: %v\n%s", name, r, debug.Stack())
+						time.Sleep(5 * time.Second)
+					}
+				}()
+				loop()
+			}()
+		}
+	}()
 }
 
 func writeAtomic(path string, data []byte) error {

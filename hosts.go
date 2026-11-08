@@ -245,7 +245,7 @@ type hostsWatch struct {
 func newHostsWatch(wake func()) *hostsWatch {
 	w := &hostsWatch{facts: map[string]remoteFacts{}, latest: map[string]string{}, busy: map[string]hostRow{},
 		wake: wake, again: make(chan bool, 1)}
-	go w.run()
+	keepGoing("hosts", w.run)
 	return w
 }
 
@@ -707,8 +707,7 @@ func (v *activityView) drawHosts(p avPaint, c avColors, x0, x1, y float64) float
 	for i, h := range rows {
 		heights[i] = 58
 		if v.confirm == h.Label && h.Label != "" {
-			_, lines := h.steps()
-			heights[i] += 34 + float64(len(lines))*18 + avBtnH + 14
+			heights[i] += 34 + float64(len(confirmLines(r, h, ix1-ix0)))*18 + avBtnH + 14
 		}
 		total += heights[i]
 	}
@@ -753,12 +752,12 @@ func (v *activityView) drawHosts(p avPaint, c avColors, x0, x1, y float64) float
 		p.text(text, ix0, ry+43, 12, tone >= 2, col, maxW)
 
 		if v.confirm == h.Label && h.Label != "" {
-			title, lines := h.steps()
+			title, _ := h.steps()
 			cy := ry + 58
 			p.text(title, ix0, cy+16, 14, true, r.pal.text, ix1-ix0)
 			cy += 30
-			for _, l := range lines {
-				p.text("• "+l, ix0, cy+4, 12, false, r.pal.gray, ix1-ix0)
+			for _, l := range confirmLines(r, h, ix1-ix0) {
+				p.text(l, ix0, cy+4, 12, false, r.pal.gray, 0)
 				cy += 18
 			}
 			cy += 8
@@ -781,4 +780,21 @@ func (v *activityView) drawHosts(p avPaint, c avColors, x0, x1, y float64) float
 		ry += heights[i]
 	}
 	return y + total
+}
+
+// confirmLines is what an upgrade will do, wrapped to the card: nothing
+// you're agreeing to is cut off.
+func confirmLines(r *renderer, h hostRow, w float64) []string {
+	_, steps := h.steps()
+	var out []string
+	for _, st := range steps {
+		for i, l := range r.wrap(st, 12, false, w-14) {
+			if i == 0 {
+				out = append(out, "• "+l)
+			} else {
+				out = append(out, "   "+l)
+			}
+		}
+	}
+	return out
 }
