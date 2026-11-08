@@ -58,16 +58,11 @@ type activityView struct {
 	msg     string
 	hosts   int // Rex servers with agents on them
 	folded  map[avTab]bool
-	stacked bool // no tabs: the pane's too narrow for them
+	stacked bool // the pane's too narrow for a row of tabs: they stack in the list
 }
 
-// shownTab is the tab in effect: all of them when the tabs are hidden.
-func (v *activityView) shownTab() avTab {
-	if v.stacked {
-		return tabAll
-	}
-	return v.tab
-}
+// shownTab is the tab in effect.
+func (v *activityView) shownTab() avTab { return v.tab }
 
 func (v *activityView) sections() (needs, working, done []Agent) {
 	for _, a := range v.agents {
@@ -486,6 +481,9 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 	y += 10
 	r := p.r
 	x0, x1 := col.x0, col.x1
+	if v.stacked {
+		y = v.tabList(p, c, x0, x1, y, len(needs), len(working), len(done)) + 18
+	}
 	if col.plan && v.hasPlan {
 		y = v.drawPlan(p, c, x0, x1, y) + 18
 	}
@@ -536,6 +534,66 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 		y += 20
 	}
 	return y - start
+}
+
+// tabList is the tabs stacked one per row, for a narrow pane: each with its
+// count, the chosen one filled.
+func (v *activityView) tabList(p avPaint, c avColors, x0, x1, y float64, nNeeds, nWorking, nDone int) float64 {
+	r := p.r
+	tabs := []struct {
+		label string
+		n     int
+		dot   color.RGBA
+		fill  color.RGBA
+	}{
+		{"All", nNeeds + nWorking + nDone, r.pal.gray, c.work},
+		{"Needs you", nNeeds, c.needs, c.needsFill},
+		{"Working", nWorking, c.work, c.work},
+		{"Done", nDone, c.good, c.work},
+	}
+	const rowH = 40.0
+	h := rowH*float64(len(tabs)) + 8
+	p.box(x0, y, x1, y+h, avRadius, c.card)
+	p.outline(x0, y, x1, y+h, avRadius, c.cardLine)
+	for i, t := range tabs {
+		ry0 := y + 4 + float64(i)*rowH
+		ry1 := ry0 + rowH
+		sel := avTab(i) == v.tab
+		ink, sub := r.pal.text, r.pal.gray
+		if sel {
+			p.box(x0+4, ry0+2, x1-4, ry1-2, 10, t.fill)
+			ink = rgb(255, 255, 255)
+			if i == int(tabNeeds) {
+				ink = c.needsInk
+			}
+			sub = ink
+		} else if i > 0 {
+			p.dot(x0+avPad+4, (ry0+ry1)/2, 4, t.dot)
+		}
+		hot := i == int(tabNeeds) && t.n > 0 && !sel
+		lx := x0 + avPad + 16
+		if i == 0 && !sel {
+			lx = x0 + avPad
+		}
+		if sel {
+			lx = x0 + avPad
+		}
+		col := ink
+		if hot {
+			col = c.needs
+		}
+		p.text(t.label, lx, (ry0+ry1)/2+5, 14.5, sel || hot, col, x1-lx-50)
+		if t.n > 0 || i == 0 {
+			p.right(fmt.Sprint(t.n), x1-avPad, (ry0+ry1)/2+5, 13.5, sel || hot, sub)
+		}
+		if i > 0 && !sel && avTab(i-1) != v.tab {
+			p.rect(x0+avPad, ry0, x1-avPad, ry0+1, c.cardLine)
+		}
+		if p.on() {
+			v.hits = append(v.hits, avHit{x0, ry0, x1, ry1, fmt.Sprintf("tab:%d", i)})
+		}
+	}
+	return y + h
 }
 
 // section draws a section's heading, which folds it away or opens it
