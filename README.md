@@ -51,6 +51,8 @@ rex-activity show       # opens it in a pane beside yours
 
 Or run `rex-activity` in any pane.
 
+To have it in Rex's command palette (⌘⇧P), run `rex-activity rex-install`. It adds **Activity: Toggle Pane** (opens it beside the pane you're in, or closes it), **Activity: Toggle Floating Window**, and **Activity: Open in a Tab**. It writes `rex_activity.lua` beside your `init.lua`, adds one line to `init.lua` that loads it (keeping a copy as `init.lua.before-rex-activity`), and reloads Rex's config. `rex-activity rex-install --remove` takes it out again. Bind one to a key in `init.lua` with, for example, `rex.bind("cmd+shift+[KeyA]", "rex_activity_pane")`.
+
 ## Using it
 
 - **Click** a card, or a row, to jump to that agent's pane.

@@ -17,6 +17,7 @@ const usage = `rex-activity: every coding agent in Rex, at a glance
   rex-activity                         run Activity in this pane
   rex-activity show [--below] [--ratio PCT]
                                        open it in a pane beside yours
+  rex-activity rex-install [--remove]  add Activity to Rex's command palette (or take it out)
   rex-activity weather PLACE           show the weather for PLACE ("Portland, Oregon");
                                        --units f|c to choose, --off to hide it
   rex-activity statusline [COMMAND...] for Claude Code's status line: notes context
@@ -44,6 +45,8 @@ func main() {
 		err = runStatusline(args)
 	case "weather":
 		err = runWeather(args)
+	case "rex-install":
+		err = runRexInstall(args)
 	case "render":
 		err = runRender(args)
 	case "help", "-h", "--help":
