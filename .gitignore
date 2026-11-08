@@ -1,0 +1,3 @@
+rex-activity
+*.png
+!docs/*.png
