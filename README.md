@@ -31,6 +31,8 @@ Or run `rex-activity` in any pane.
 
 - **Click** a card, or a row, to jump to that agent's pane.
 - **Click a tab** to show only what needs you, what's working, or what's done. Click it again for all. **1** to **4** do the same.
+- **Click a section's heading** (Needs you, Working, Done) to fold it away, and again to open it.
+- **In a narrow pane** the tabs would stop being readable, so they go away and the sections stack with their counts. You fold them from their headings instead.
 - **Scroll** with the wheel, or **j** and **k**. The title and tabs stay pinned.
 - **q** or **Esc** closes it.
 

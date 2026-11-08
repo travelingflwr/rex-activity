@@ -23,8 +23,7 @@ const (
 	avWide    = 640.0 // from this pane width, two columns
 	avColGap  = 20.0
 	avTabH    = 34.0  // a row of tabs
-	avTabGrid = 420.0 // under this header width, the tabs go two by two
-	avTabList = 260.0 // and under this, one per row
+	avStacked = 420.0 // under this column width the tabs don't read: the sections take their place
 	avPad     = 14.0  // inside a card
 	avGap     = 10.0  // between cards
 	avBtnH    = 36.0
@@ -44,7 +43,7 @@ const (
 // avHit is a place on the pane that does something when clicked.
 type avHit struct {
 	x0, y0, x1, y1 float64
-	action         string // tab:N or open:KEY
+	action         string // tab:N, fold:N or open:KEY
 }
 
 type activityView struct {
@@ -56,6 +55,16 @@ type activityView struct {
 	hits    []avHit
 	msg     string
 	hosts   int // Rex servers with agents on them
+	folded  map[avTab]bool
+	stacked bool // no tabs: the pane's too narrow for them
+}
+
+// shownTab is the tab in effect: all of them when the tabs are hidden.
+func (v *activityView) shownTab() avTab {
+	if v.stacked {
+		return tabAll
+	}
+	return v.tab
 }
 
 func (v *activityView) sections() (needs, working, done []Agent) {
@@ -118,6 +127,13 @@ func runActivity(args []string) error {
 	act := func(action string) {
 		kind, id, _ := strings.Cut(action, ":")
 		switch kind {
+		case "fold":
+			var n int
+			fmt.Sscan(id, &n)
+			if v.folded == nil {
+				v.folded = map[avTab]bool{}
+			}
+			v.folded[avTab(n)] = !v.folded[avTab(n)]
 		case "tab":
 			var n int
 			fmt.Sscan(id, &n)
@@ -225,7 +241,7 @@ func runActivity(args []string) error {
 
 func (v *activityView) drawKey() string {
 	var b strings.Builder
-	fmt.Fprint(&b, v.tab, v.scroll, v.msg, v.hasPlan, v.plan.Updated.Unix())
+	fmt.Fprint(&b, v.tab, v.folded, v.scroll, v.msg, v.hasPlan, v.plan.Updated.Unix())
 	for _, a := range v.agents {
 		fmt.Fprint(&b, a.key(), a.State, a.Msg, a.Title, a.Since.Unix(), a.Ctx.Tokens, ";")
 	}
@@ -317,7 +333,8 @@ type avColumn struct {
 // columns lays the list out for the pane's width: two columns when it's
 // wide and showing everything, else one.
 func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
-	if v.tab == tabAll && w >= avWide {
+	tab := v.shownTab()
+	if tab == tabAll && w >= avWide {
 		colW := min((w-32-avColGap)/2, avColMax)
 		x0 = (w - 2*colW - avColGap) / 2
 		x1 = w - x0
@@ -330,7 +347,7 @@ func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
 	x0 = (w - colW) / 2
 	x1 = x0 + colW
 	one := avColumn{x0: x0, x1: x1}
-	switch v.tab {
+	switch tab {
 	case tabAll:
 		one.plan, one.needs, one.work, one.fresh = true, true, true, true
 	case tabNeeds:
@@ -343,29 +360,21 @@ func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
 	return []avColumn{one}, x0, x1
 }
 
-// tabGrid is how the tabs sit for a header x0..x1 wide: tabs per row, and rows.
-func tabGrid(width float64) (perRow, rows int) {
-	switch {
-	case width < avTabList:
-		return 1, 4
-	case width < avTabGrid:
-		return 2, 2
+// headHeight is the pinned title, and the tabs when they show.
+func (v *activityView) headHeight() float64 {
+	if v.stacked {
+		return 66
 	}
-	return 4, 1
-}
-
-// headHeight is the pinned title and tabs, for a header that wide.
-func headHeight(width float64) float64 {
-	_, rows := tabGrid(width)
-	return 58 + float64(rows)*avTabH + 12
+	return 104
 }
 
 func (v *activityView) draw(r *renderer, img *image.RGBA, w, h float64) {
 	v.hits = v.hits[:0]
 	c := themeColors(r)
 	needs, working, done := v.sections()
+	v.stacked = min(w-24, avColMax) < avStacked
 	cols, x0, x1 := v.columns(w)
-	avHeadH := headHeight(x1 - x0)
+	avHeadH := v.headHeight()
 
 	// The list, scrolled, under the pinned header.
 	tallest := 0.0
@@ -404,9 +413,11 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 	p.text(sub, x0+2, 20, 12, false, r.pal.gray, 0)
 	p.text("Activity", x0, 46, 24, true, r.pal.text, 0)
 
-	perRow, nRows := tabGrid(x1 - x0)
-	ty0 := 58.0
-	p.box(x0, ty0, x1, ty0+float64(nRows)*avTabH+(float64(nRows)-1)*2, 10, c.card)
+	if v.stacked {
+		return
+	}
+	ty0, ty1 := 58.0, 58.0+avTabH
+	p.box(x0, ty0, x1, ty1, 10, c.card)
 	tabs := []struct {
 		label string
 		n     int
@@ -417,27 +428,20 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 		{"Working", nWorking, c.work},
 		{"Done", nDone, c.work},
 	}
-	tw := (x1 - x0 - 8) / float64(perRow)
+	tw := (x1 - x0 - 8) / float64(len(tabs))
 	for i, t := range tabs {
-		row, colN := i/perRow, i%perRow
-		bx0 := x0 + 4 + float64(colN)*tw
+		bx0 := x0 + 4 + float64(i)*tw
 		bx1 := bx0 + tw
-		by0 := ty0 + float64(row)*(avTabH+2)
-		by1 := by0 + avTabH
 		label := t.label
 		if i > 0 && t.n > 0 {
 			label = fmt.Sprintf("%s %d", t.label, t.n)
-		}
-		size := 13.0
-		if tw < 84 {
-			size = 11.5
 		}
 		sel := avTab(i) == v.tab
 		hot := i == int(tabNeeds) && t.n > 0
 		col := r.pal.gray
 		switch {
 		case sel:
-			p.box(bx0, by0+4, bx1, by1-4, 8, t.fill)
+			p.box(bx0, ty0+4, bx1, ty1-4, 8, t.fill)
 			col = rgb(255, 255, 255)
 			if i == int(tabNeeds) {
 				col = c.needsInk
@@ -446,9 +450,9 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 			col = c.needs
 		}
 		bold := sel || hot
-		lw := r.width(r.fit(r.clean(label, bold), size, bold, tw-8), size, bold)
-		p.text(label, (bx0+bx1)/2-lw/2, (by0+by1)/2+size*0.36, size, bold, col, tw-8)
-		v.hits = append(v.hits, avHit{bx0, by0, bx1, by1, fmt.Sprintf("tab:%d", i)})
+		lw := r.width(r.fit(r.clean(label, bold), 13, bold, tw-8), 13, bold)
+		p.text(label, (bx0+bx1)/2-lw/2, (ty0+ty1)/2+4.7, 13, bold, col, tw-8)
+		v.hits = append(v.hits, avHit{bx0, ty0, bx1, ty1, fmt.Sprintf("tab:%d", i)})
 	}
 }
 
@@ -464,8 +468,11 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 	shown := false
 	if col.needs && (len(needs) > 0 || split) {
 		shown = true
-		y = v.section(p, "NEEDS YOU", c.needs, x0, y)
-		if len(needs) == 0 {
+		var folded bool
+		y, folded = v.section(p, tabNeeds, "NEEDS YOU", len(needs), c.needs, x0, x1, y)
+		if folded {
+			needs = nil
+		} else if len(needs) == 0 {
 			p.box(x0, y, x1, y+52, avRadius, c.card)
 			p.text("Nothing needs you right now", x0+avPad, y+31, 13.5, false, r.pal.gray, x1-x0-2*avPad)
 			y += 52 + avGap
@@ -477,13 +484,17 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 	}
 	if col.work && len(working) > 0 {
 		shown = true
-		y = v.section(p, "WORKING", c.work, x0, y)
-		y = v.rows(p, c, working, x0, x1, y, false) + 18
+		var folded bool
+		if y, folded = v.section(p, tabWorking, "WORKING", len(working), c.work, x0, x1, y); !folded {
+			y = v.rows(p, c, working, x0, x1, y, false) + 18
+		}
 	}
 	if col.fresh && len(done) > 0 {
 		shown = true
-		y = v.section(p, "DONE", c.good, x0, y)
-		y = v.rows(p, c, done, x0, x1, y, true) + 18
+		var folded bool
+		if y, folded = v.section(p, tabDone, "DONE", len(done), c.good, x0, x1, y); !folded {
+			y = v.rows(p, c, done, x0, x1, y, true) + 18
+		}
 	}
 	if !shown && !(col.plan && v.hasPlan) {
 		msg := map[avTab]string{
@@ -491,10 +502,10 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 			tabNeeds:   "Nothing needs you",
 			tabWorking: "Nothing working",
 			tabDone:    "Nothing finished yet",
-		}[v.tab]
+		}[v.shownTab()]
 		y += 30
 		p.text(msg, x0+2, y, 15, true, r.pal.gray, 0)
-		if v.tab == tabAll {
+		if v.shownTab() == tabAll {
 			y += 22
 			p.text("Start Claude Code or Codex in a Rex pane and it shows up here.", x0+2, y, 12.5, false, r.pal.faint, x1-x0)
 		}
@@ -503,10 +514,32 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 	return y - start
 }
 
-func (v *activityView) section(p avPaint, label string, col color.RGBA, x0, y float64) float64 {
+// section draws a section's heading, which folds it away or opens it
+// again, and reports whether it's folded.
+func (v *activityView) section(p avPaint, which avTab, label string, n int, col color.RGBA, x0, x1, y float64) (float64, bool) {
+	r := p.r
+	folded := v.folded[which]
 	p.dot(x0+5, y+10, 4, col)
-	p.text(label, x0+16, y+14.5, 11.5, true, col, 0)
-	return y + 26
+	lw := p.text(label, x0+16, y+14.5, 11.5, true, col, 0)
+	if n > 0 {
+		p.text(fmt.Sprint(n), x0+16+lw+8, y+14.5, 11.5, true, r.pal.gray, 0)
+	}
+	// A chevron: pointing down while open, right while folded.
+	if p.on() {
+		cx, cy := x1-10, y+10
+		pts := [][2]float64{{cx - 4, cy - 2}, {cx + 4, cy - 2}, {cx, cy + 3}}
+		if folded {
+			pts = [][2]float64{{cx - 2, cy - 4}, {cx + 3, cy}, {cx - 2, cy + 4}}
+		}
+		pb := r.path(p.img)
+		pb.poly(pts)
+		pb.fill(r.pal.gray)
+		v.hits = append(v.hits, avHit{x0, y - 6, x1, y + 30, fmt.Sprintf("fold:%d", which)})
+	}
+	if folded {
+		return y + 34, true
+	}
+	return y + 26, false
 }
 
 func (v *activityView) drawPlan(p avPaint, c avColors, x0, x1, y float64) float64 {
