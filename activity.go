@@ -40,6 +40,7 @@ const (
 	tabNeeds
 	tabWorking
 	tabDone
+	foldHosts avTab = 10 // the hosts section's fold; it has no tab
 )
 
 // avHit is a place on the pane that does something when clicked.
@@ -49,16 +50,21 @@ type avHit struct {
 }
 
 type activityView struct {
-	agents  []Agent
-	plan    planUsage
-	hasPlan bool
-	tab     avTab
-	scroll  float64
-	hits    []avHit
-	msg     string
-	hosts   int // Rex servers with agents on them
-	folded  map[avTab]bool
-	stacked bool // the pane's too narrow for a row of tabs: they stack in the list
+	agents     []Agent
+	plan       planUsage
+	hasPlan    bool
+	tab        avTab
+	scroll     float64
+	hits       []avHit
+	msg        string
+	hostN      int // Rex servers with agents on them
+	hosts      []hostRow
+	confirm    string // the host whose upgrade waits on you to confirm
+	weather    *conditions
+	weatherErr string
+	weatherSet bool
+	folded     map[avTab]bool
+	stacked    bool // the pane's too narrow for a row of tabs: they stack in the list
 }
 
 // shownTab is the tab in effect.
@@ -84,7 +90,7 @@ func (v *activityView) set(agents []Agent) {
 	for _, a := range agents {
 		hosts[a.Host] = true
 	}
-	v.hosts = len(hosts)
+	v.hostN = len(hosts)
 	v.plan, v.hasPlan = loadPlan()
 }
 
@@ -97,6 +103,19 @@ func runActivity(args []string) error {
 	sc := newScanner()
 	v := &activityView{}
 	v.set(sc.agents())
+	wake := make(chan struct{}, 1)
+	poke := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	ww := newWeatherWatch(poke)
+	hw := newHostsWatch(poke)
+	refresh := func() {
+		v.weather, v.weatherErr, v.weatherSet = ww.state()
+		v.hosts = hw.snapshot()
+	}
 
 	poll := time.NewTicker(400 * time.Millisecond)
 	defer poll.Stop()
@@ -141,6 +160,27 @@ func runActivity(args []string) error {
 				n = int(tabAll)
 			}
 			v.tab, v.scroll = avTab(n), 0
+		case "weather":
+			ww.refresh()
+			say("Checking the weather")
+		case "host":
+			verb, label, _ := strings.Cut(id, ":")
+			switch verb {
+			case "Upgrade", "Restart":
+				v.confirm = label
+			case "cancel":
+				v.confirm = ""
+			case "go":
+				v.confirm = ""
+				for _, h := range v.hosts {
+					if h.Label == label {
+						hw.upgrade(h)
+					}
+				}
+			case "OK":
+				hw.dismiss(label)
+			}
+			refresh()
 		case "open":
 			for _, a := range v.agents {
 				if a.key() == id {
@@ -165,6 +205,9 @@ func runActivity(args []string) error {
 			s.saveSnapshot("activity")
 		case <-sc.changed:
 			v.set(sc.agents())
+			draw()
+		case <-wake:
+			refresh()
 			draw()
 		case <-poll.C:
 			s.recheck()
@@ -248,7 +291,13 @@ func runActivity(args []string) error {
 
 func (v *activityView) drawKey() string {
 	var b strings.Builder
-	fmt.Fprint(&b, v.tab, v.folded, v.scroll, v.msg, v.hasPlan, v.plan.Updated.Unix())
+	fmt.Fprint(&b, v.tab, v.folded, v.scroll, v.msg, v.hasPlan, v.plan.Updated.Unix(), v.confirm, v.weatherErr, v.weatherSet)
+	if v.weather != nil {
+		fmt.Fprint(&b, v.weather.Fetched.Unix())
+	}
+	for _, h := range v.hosts {
+		fmt.Fprint(&b, h.Label, h.Status, h.Note, h.Running, h.Latest, ";")
+	}
 	for _, a := range v.agents {
 		fmt.Fprint(&b, a.key(), a.State, a.Msg, a.Title, a.Since.Unix(), a.Ctx.Tokens, ";")
 	}
@@ -345,8 +394,9 @@ func themeColors(r *renderer) avColors {
 // avColumn is one column of the list and what goes in it.
 type avColumn struct {
 	x0, x1             float64
-	plan               bool
+	plan, weather      bool
 	needs, work, fresh bool // which sections
+	hostList           bool
 }
 
 // columns lays the list out for the pane's width: two columns when it's
@@ -358,8 +408,8 @@ func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
 		x0 = (w - 2*colW - avColGap) / 2
 		x1 = w - x0
 		return []avColumn{
-			{x0: x0, x1: x0 + colW, needs: true},
-			{x0: x1 - colW, x1: x1, plan: true, work: true, fresh: true},
+			{x0: x0, x1: x0 + colW, weather: true, needs: true},
+			{x0: x1 - colW, x1: x1, plan: true, work: true, fresh: true, hostList: true},
 		}, x0, x1
 	}
 	colW := min(w-24, avColMax)
@@ -368,7 +418,7 @@ func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
 	one := avColumn{x0: x0, x1: x1}
 	switch tab {
 	case tabAll:
-		one.plan, one.needs, one.work, one.fresh = true, true, true, true
+		one.weather, one.plan, one.needs, one.work, one.fresh, one.hostList = true, true, true, true, true, true
 	case tabNeeds:
 		one.needs = true
 	case tabWorking:
@@ -423,8 +473,8 @@ func (v *activityView) draw(r *renderer, img *image.RGBA, w, h float64) {
 func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone int, x0, x1 float64) {
 	r := p.r
 	sub := fmt.Sprintf("%d agent%s", len(v.agents), plural(len(v.agents)))
-	if v.hosts > 1 {
-		sub = fmt.Sprintf("%d hosts · ", v.hosts) + sub
+	if v.hostN > 1 {
+		sub = fmt.Sprintf("%d hosts · ", v.hostN) + sub
 	}
 	if v.msg != "" {
 		sub = v.msg
@@ -484,6 +534,12 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 	if v.stacked {
 		y = v.tabList(p, c, x0, x1, y, len(needs), len(working), len(done)) + 18
 	}
+	extras := false
+	if col.weather {
+		if ny := v.drawWeather(p, c, x0, x1, y); ny > y {
+			y, extras = ny+18, true
+		}
+	}
 	if col.plan && v.hasPlan {
 		y = v.drawPlan(p, c, x0, x1, y) + 18
 	}
@@ -518,7 +574,11 @@ func (v *activityView) drawColumn(p avPaint, c avColors, col avColumn, needs, wo
 			y = v.rows(p, c, done, x0, x1, y, true) + 18
 		}
 	}
-	if !shown && !(col.plan && v.hasPlan) {
+	if col.hostList && len(v.hosts) > 0 {
+		y = v.drawHosts(p, c, x0, x1, y) + 18
+		extras = true
+	}
+	if !shown && !(col.plan && v.hasPlan) && !extras {
 		msg := map[avTab]string{
 			tabAll:     "No agents running",
 			tabNeeds:   "Nothing needs you",

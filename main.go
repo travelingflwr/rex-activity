@@ -17,6 +17,8 @@ const usage = `rex-activity: every coding agent in Rex, at a glance
   rex-activity                         run Activity in this pane
   rex-activity show [--below] [--ratio PCT]
                                        open it in a pane beside yours
+  rex-activity weather PLACE           show the weather for PLACE ("Portland, Oregon");
+                                       --units f|c to choose, --off to hide it
   rex-activity statusline [COMMAND...] for Claude Code's status line: notes context
                                        and plan usage, then runs COMMAND, your own
   rex-activity render -o FILE [--theme light|dark] [--cols N] [--rows N]
@@ -40,6 +42,8 @@ func main() {
 		err = runShow(args)
 	case "statusline":
 		err = runStatusline(args)
+	case "weather":
+		err = runWeather(args)
 	case "render":
 		err = runRender(args)
 	case "help", "-h", "--help":
@@ -140,11 +144,23 @@ func demoActivity(now time.Time) *activityView {
 	}
 	v := &activityView{}
 	v.agents = agents
-	v.hosts = 3
+	v.hostN = 3
 	v.plan = planUsage{
 		FiveHour: &planWindow{Used: 62, ResetAt: now.Add(2*time.Hour + 10*time.Minute)},
 		Weekly:   &planWindow{Used: 41, ResetAt: now.Add(4 * 24 * time.Hour)},
 	}
 	v.hasPlan = true
+	v.weatherSet = true
+	v.weather = &conditions{Place: "Lakeside", Temp: 71, Feels: 69, High: 76, Low: 52, Code: 2, Day: true,
+		Wind: 8, Humidity: 34, Rain: 10, F: true, Fetched: now}
+	for i, code := range []int{2, 1, 0, 3, 61, 0} {
+		t := now.Truncate(time.Hour).Add(time.Duration(2*i+1) * time.Hour)
+		v.weather.Hours = append(v.weather.Hours, hourly{At: t, Temp: 72 - float64(i*3), Code: code, Day: i < 4})
+	}
+	v.hosts = []hostRow{
+		{App: "0.1.0 (1880)", Platform: "macOS arm64", Status: hsUpToDate},
+		{Label: "build-box", Running: "0.0.1794111130-g9bcf6a", Status: hsUpToDate},
+		{Label: "lab-server", Running: "0.0.1793900000-g1a2b3c", Latest: "0.0.1794111130-g9bcf6a", Status: hsUpdate, CanUpgrade: true},
+	}
 	return v
 }
