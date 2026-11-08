@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,6 +47,12 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "rex-activity: unknown command %q\n\n%s", cmd, usage)
 		os.Exit(2)
+	}
+	if err == errRestart {
+		if self, e := os.Executable(); e == nil {
+			time.Sleep(300 * time.Millisecond) // let the new build finish landing
+			err = syscall.Exec(self, os.Args, os.Environ())
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "rex-activity:", strings.TrimSpace(err.Error()))

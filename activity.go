@@ -9,10 +9,12 @@ package main
 // follows the Rex theme, light or dark.
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"os"
 	"strings"
 	"time"
 )
@@ -107,6 +109,9 @@ func runActivity(args []string) error {
 	defer slow.Stop()
 	msgUntil := time.Time{}
 	lastKey := ""
+	self, _ := os.Executable()
+	built := fileStamp(self)
+	checked := time.Now()
 
 	draw := func() {
 		key := fmt.Sprint(s.ws, s.pal, v.drawKey())
@@ -168,6 +173,13 @@ func runActivity(args []string) error {
 			draw()
 		case <-poll.C:
 			s.recheck()
+			// A new build at our path: start again on it, in place.
+			if time.Since(checked) > 2*time.Second {
+				checked = time.Now()
+				if st := fileStamp(self); st != "" && built != "" && st != built {
+					return errRestart
+				}
+			}
 			if v.msg != "" && time.Now().After(msgUntil) {
 				v.msg = ""
 				draw()
@@ -246,6 +258,18 @@ func (v *activityView) drawKey() string {
 		fmt.Fprint(&b, a.key(), a.State, a.Msg, a.Title, a.Since.Unix(), a.Ctx.Tokens, ";")
 	}
 	return b.String()
+}
+
+// errRestart asks main to run the new build in this pane.
+var errRestart = errors.New("restart")
+
+// fileStamp tells one build at a path from another.
+func fileStamp(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprint(fi.Size(), fi.ModTime().UnixNano())
 }
 
 // --- drawing ---------------------------------------------------------------

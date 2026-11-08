@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -366,7 +367,7 @@ func promptText(raw json.RawMessage) string {
 			}
 		}
 	}
-	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(imageRef.ReplaceAllString(s, ""))
 	if s == "" || strings.HasPrefix(s, "<") || strings.HasPrefix(s, "[Request interrupted") {
 		return ""
 	}
@@ -490,3 +491,6 @@ func (sc *scanner) agents() []Agent {
 	})
 	return all
 }
+
+// imageRef is how a pasted picture shows in a prompt.
+var imageRef = regexp.MustCompile(`\[Image #\d+\]`)
