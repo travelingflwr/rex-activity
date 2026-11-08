@@ -20,7 +20,7 @@ import (
 // Layout, in points.
 const (
 	avColMax  = 540.0 // a column's widest
-	avWide    = 860.0 // from this pane width, two columns
+	avWide    = 640.0 // from this pane width, two columns
 	avColGap  = 20.0
 	avHeadH   = 104.0 // the pinned title and tabs
 	avPad     = 14.0  // inside a card
