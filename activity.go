@@ -22,7 +22,9 @@ const (
 	avColMax  = 540.0 // a column's widest
 	avWide    = 640.0 // from this pane width, two columns
 	avColGap  = 20.0
-	avHeadH   = 104.0 // the pinned title and tabs
+	avTabH    = 34.0  // a row of tabs
+	avTabGrid = 420.0 // under this header width, the tabs go two by two
+	avTabList = 260.0 // and under this, one per row
 	avPad     = 14.0  // inside a card
 	avGap     = 10.0  // between cards
 	avBtnH    = 36.0
@@ -341,11 +343,29 @@ func (v *activityView) columns(w float64) (cols []avColumn, x0, x1 float64) {
 	return []avColumn{one}, x0, x1
 }
 
+// tabGrid is how the tabs sit for a header x0..x1 wide: tabs per row, and rows.
+func tabGrid(width float64) (perRow, rows int) {
+	switch {
+	case width < avTabList:
+		return 1, 4
+	case width < avTabGrid:
+		return 2, 2
+	}
+	return 4, 1
+}
+
+// headHeight is the pinned title and tabs, for a header that wide.
+func headHeight(width float64) float64 {
+	_, rows := tabGrid(width)
+	return 58 + float64(rows)*avTabH + 12
+}
+
 func (v *activityView) draw(r *renderer, img *image.RGBA, w, h float64) {
 	v.hits = v.hits[:0]
 	c := themeColors(r)
 	needs, working, done := v.sections()
 	cols, x0, x1 := v.columns(w)
+	avHeadH := headHeight(x1 - x0)
 
 	// The list, scrolled, under the pinned header.
 	tallest := 0.0
@@ -384,8 +404,9 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 	p.text(sub, x0+2, 20, 12, false, r.pal.gray, 0)
 	p.text("Activity", x0, 46, 24, true, r.pal.text, 0)
 
-	ty0, ty1 := 58.0, 92.0
-	p.box(x0, ty0, x1, ty1, 10, c.card)
+	perRow, nRows := tabGrid(x1 - x0)
+	ty0 := 58.0
+	p.box(x0, ty0, x1, ty0+float64(nRows)*avTabH+(float64(nRows)-1)*2, 10, c.card)
 	tabs := []struct {
 		label string
 		n     int
@@ -396,10 +417,13 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 		{"Working", nWorking, c.work},
 		{"Done", nDone, c.work},
 	}
-	tw := (x1 - x0 - 8) / float64(len(tabs))
+	tw := (x1 - x0 - 8) / float64(perRow)
 	for i, t := range tabs {
-		bx0 := x0 + 4 + float64(i)*tw
+		row, colN := i/perRow, i%perRow
+		bx0 := x0 + 4 + float64(colN)*tw
 		bx1 := bx0 + tw
+		by0 := ty0 + float64(row)*(avTabH+2)
+		by1 := by0 + avTabH
 		label := t.label
 		if i > 0 && t.n > 0 {
 			label = fmt.Sprintf("%s %d", t.label, t.n)
@@ -413,7 +437,7 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 		col := r.pal.gray
 		switch {
 		case sel:
-			p.box(bx0, ty0+4, bx1, ty1-4, 8, t.fill)
+			p.box(bx0, by0+4, bx1, by1-4, 8, t.fill)
 			col = rgb(255, 255, 255)
 			if i == int(tabNeeds) {
 				col = c.needsInk
@@ -423,8 +447,8 @@ func (v *activityView) drawHeader(p avPaint, c avColors, nNeeds, nWorking, nDone
 		}
 		bold := sel || hot
 		lw := r.width(r.fit(r.clean(label, bold), size, bold, tw-8), size, bold)
-		p.text(label, (bx0+bx1)/2-lw/2, (ty0+ty1)/2+size*0.36, size, bold, col, tw-8)
-		v.hits = append(v.hits, avHit{bx0, ty0, bx1, ty1, fmt.Sprintf("tab:%d", i)})
+		p.text(label, (bx0+bx1)/2-lw/2, (by0+by1)/2+size*0.36, size, bold, col, tw-8)
+		v.hits = append(v.hits, avHit{bx0, by0, bx1, by1, fmt.Sprintf("tab:%d", i)})
 	}
 }
 
@@ -488,39 +512,61 @@ func (v *activityView) section(p avPaint, label string, col color.RGBA, x0, y fl
 func (v *activityView) drawPlan(p avPaint, c avColors, x0, x1, y float64) float64 {
 	r := p.r
 	type row struct {
-		label string
-		w     *planWindow
+		label, note string
+		w           *planWindow
 	}
 	var rows []row
-	if v.plan.FiveHour != nil {
-		rows = append(rows, row{"Claude · 5-hour", v.plan.FiveHour})
+	add := func(label string, w *planWindow) {
+		if w == nil {
+			return
+		}
+		note := fmt.Sprintf("%.0f%%", w.Used)
+		if !w.ResetAt.IsZero() {
+			note += " · resets " + resetText(r.now, w.ResetAt)
+		}
+		rows = append(rows, row{label, note, w})
 	}
-	if v.plan.Weekly != nil {
-		rows = append(rows, row{"Claude · weekly", v.plan.Weekly})
+	add("Claude · 5-hour", v.plan.FiveHour)
+	add("Claude · weekly", v.plan.Weekly)
+	ix0, ix1 := x0+avPad, x1-avPad
+	inner := ix1 - ix0
+	// Too narrow for a label and its numbers side by side: the numbers go
+	// on a line of their own.
+	stack := false
+	for _, rw := range rows {
+		if r.width(r.clean(rw.label, false), 12.5, false)+r.width(r.clean(rw.note, false), 12, false)+12 > inner {
+			stack = true
+		}
 	}
-	h := avPad*2 + 18 + float64(len(rows))*38
+	rowH := 38.0
+	if stack {
+		rowH = 54
+	}
+	h := avPad*2 + 18 + float64(len(rows))*rowH
 	p.box(x0, y, x1, y+h, avRadius, c.card)
 	p.outline(x0, y, x1, y+h, avRadius, c.cardLine)
-	ix0, ix1 := x0+avPad, x1-avPad
 	ty := y + avPad + 12
-	p.text("Plan usage", ix0, ty, 13, true, r.pal.text, 0)
-	p.right("shared by every agent", ix1, ty, 11.5, false, r.pal.faint)
+	tw := p.text("Plan usage", ix0, ty, 13, true, r.pal.text, 0)
+	if sub := "shared by every agent"; tw+r.width(sub, 11.5, false)+12 <= inner {
+		p.right(sub, ix1, ty, 11.5, false, r.pal.faint)
+	}
 	ry := ty + 10
 	for _, rw := range rows {
 		ry += 18
-		p.text(rw.label, ix0, ry, 12.5, false, r.pal.text, 0)
-		note := fmt.Sprintf("%.0f%%", rw.w.Used)
-		if !rw.w.ResetAt.IsZero() {
-			note += " · resets " + resetText(r.now, rw.w.ResetAt)
-		}
 		col, bar := r.pal.gray, c.work
 		if rw.w.Used >= 80 {
 			col, bar = c.warn, c.warn
 		}
-		p.right(note, ix1, ry, 12, false, col)
+		p.text(rw.label, ix0, ry, 12.5, false, r.pal.text, inner)
+		if stack {
+			ry += 16
+			p.text(rw.note, ix0, ry, 12, false, col, inner)
+		} else {
+			p.right(rw.note, ix1, ry, 12, false, col)
+		}
 		by := ry + 8
 		p.box(ix0, by, ix1, by+6, 3, c.track)
-		p.box(ix0, by, ix0+max(6, (ix1-ix0)*min(1, rw.w.Used/100)), by+6, 3, bar)
+		p.box(ix0, by, ix0+max(6, inner*min(1, rw.w.Used/100)), by+6, 3, bar)
 		ry += 20
 	}
 	return y + h
